@@ -1,0 +1,30 @@
+# Dependências principais do LangGraph
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+
+# Integrações com LLMs (escolha uma ou mais)
+# Descomente conforme necessário:
+
+# OpenAI
+# langchain-openai>=0.2.0
+
+# Anthropic (Claude)
+# langchain-anthropic>=0.2.0
+
+# Google (Gemini)
+# langchain-google-genai>=2.0.0
+
+# Ollama (local)
+# langchain-community>=0.3.0
+
+# Utilitários
+typing-extensions>=4.12.0
+
+# Persistência (opcional)
+# aiosqlite>=0.20.0  # Para AsyncSqliteSaver
+# psycopg2-binary>=2.9.0  # Para PostgreSQL
+
+# Ferramentas adicionais (opcional)
+# langchain-experimental>=0.3.0
+# tavily-python>=0.5.0  # Para busca web
