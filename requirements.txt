@@ -7,7 +7,7 @@ langchain-core>=0.3.0
 # Descomente conforme necessário:
 
 # OpenAI
-# langchain-openai>=0.2.0
+ langchain-openai>=0.2.0
 
 # Anthropic (Claude)
 # langchain-anthropic>=0.2.0
@@ -27,4 +27,4 @@ typing-extensions>=4.12.0
 
 # Ferramentas adicionais (opcional)
 # langchain-experimental>=0.3.0
-# tavily-python>=0.5.0  # Para busca web
+ tavily-python>=0.5.0  # Para busca web

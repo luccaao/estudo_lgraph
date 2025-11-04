@@ -1,632 +1,669 @@
 """
 ===========================================
 ESTUDO GUIADO LANGGRAPH - PARTE 7
-Casos Práticos e Aplicações Reais
+Casos Práticos Avançados: Agentes de IA Reais
 ===========================================
 
-Exemplos práticos e completos que você pode usar como base
-para seus próprios projetos.
+Implementações completas e práticas de agentes de IA que você pode usar:
+
+1. RAG Agent: Agente que consulta base de conhecimento
+2. Code Agent: Agente que escreve e executa código
+3. Research Agent: Agente que pesquisa na web
+4. Data Analysis Agent: Agente que analisa dados
 """
 
-from typing import TypedDict, Annotated, Literal
+import os
+from typing import TypedDict, Annotated, Sequence, List
 from langgraph.graph import StateGraph, END
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
 import operator
-from datetime import datetime
-import re
 
 
-# ===========================================
-# CASO 1: ASSISTENTE DE ATENDIMENTO AO CLIENTE
-# ===========================================
+# ===================================================================
+# CASO 1: RAG AGENT - AGENTE COM BASE DE CONHECIMENTO
+# ===================================================================
+print("\n" + "="*70)
+print("CASO 1: RAG Agent - Consulta Base de Conhecimento")
+print("="*70)
+print("""
+RAG = Retrieval Augmented Generation
 
-class EstadoAtendimento(TypedDict):
-    mensagem_cliente: str
-    categoria: str
-    prioridade: str
-    informacoes_coletadas: dict
-    solucao: str
-    satisfacao: int
-    historico: Annotated[list, operator.add]
+O agente:
+1. Recebe uma pergunta
+2. Busca informações relevantes na base de conhecimento
+3. Usa LLM para responder com base nos documentos encontrados
+""")
 
 
-def classificar_solicitacao(estado: EstadoAtendimento) -> EstadoAtendimento:
-    """Classifica a solicitação do cliente"""
-    mensagem = estado["mensagem_cliente"].lower()
-
-    # Classificação por palavras-chave
-    if any(palavra in mensagem for palavra in ["urgente", "crítico", "parado"]):
-        prioridade = "alta"
-    elif any(palavra in mensagem for palavra in ["importante", "preciso"]):
-        prioridade = "media"
-    else:
-        prioridade = "baixa"
-
-    # Categorização
-    if any(palavra in mensagem for palavra in ["não consigo", "erro", "problema"]):
-        categoria = "tecnico"
-    elif any(palavra in mensagem for palavra in ["cobrança", "pagamento", "fatura"]):
-        categoria = "financeiro"
-    elif any(palavra in mensagem for palavra in ["cancelar", "desistir"]):
-        categoria = "cancelamento"
-    else:
-        categoria = "geral"
-
-    print(f"[CLASSIFICAÇÃO] Categoria: {categoria} | Prioridade: {prioridade}")
-
-    return {
-        **estado,
-        "categoria": categoria,
-        "prioridade": prioridade,
-        "historico": [f"Classificado como {categoria} - prioridade {prioridade}"]
+# Simular base de conhecimento
+BASE_CONHECIMENTO = {
+    "produtos": [
+        {"id": 1, "nome": "Plano Basic", "preco": 29.90, "features": "5GB storage, suporte email"},
+        {"id": 2, "nome": "Plano Pro", "preco": 79.90, "features": "50GB storage, suporte 24/7, API access"},
+        {"id": 3, "nome": "Plano Enterprise", "preco": 199.90, "features": "Ilimitado, suporte dedicado, SLA"},
+    ],
+    "politicas": {
+        "cancelamento": "Pode cancelar a qualquer momento. Reembolso proporcional até 7 dias.",
+        "upgrade": "Upgrade imediato com cobrança proporcional.",
+        "suporte": "Basic: email. Pro: email + chat. Enterprise: telefone dedicado."
+    },
+    "documentacao": {
+        "api": "Nossa API REST usa OAuth2. Endpoint base: api.empresa.com/v1",
+        "integracao": "Suportamos Zapier, Slack, Microsoft Teams",
+        "seguranca": "Certificação ISO 27001, LGPD compliant, criptografia end-to-end"
     }
+}
 
 
-def coletar_informacoes(estado: EstadoAtendimento) -> EstadoAtendimento:
-    """Coleta informações necessárias baseado na categoria"""
-    categoria = estado["categoria"]
-    mensagem = estado["mensagem_cliente"]
-
-    info = {}
-
-    # Extrai informações relevantes
-    if categoria == "tecnico":
-        # Procura por códigos de erro
-        erro_match = re.search(r'erro\s*(\d+|[A-Z]+\d+)', mensagem, re.IGNORECASE)
-        if erro_match:
-            info["codigo_erro"] = erro_match.group(1)
-        info["tipo"] = "Suporte Técnico"
-
-    elif categoria == "financeiro":
-        # Procura por valores
-        valor_match = re.search(r'R?\$?\s*(\d+[.,]?\d*)', mensagem)
-        if valor_match:
-            info["valor"] = valor_match.group(1)
-        info["tipo"] = "Financeiro"
-
-    elif categoria == "cancelamento":
-        info["tipo"] = "Retenção"
-        info["motivo"] = "solicitacao_cancelamento"
-
-    else:
-        info["tipo"] = "Geral"
-
-    print(f"[COLETA] Informações: {info}")
-
-    return {
-        **estado,
-        "informacoes_coletadas": info,
-        "historico": [f"Informações coletadas: {list(info.keys())}"]
-    }
+class EstadoRAG(TypedDict):
+    mensagens: Annotated[Sequence[BaseMessage], operator.add]
+    query: str
+    documentos_relevantes: List[str]
+    resposta_final: str
 
 
-def gerar_solucao(estado: EstadoAtendimento) -> EstadoAtendimento:
-    """Gera solução baseada na categoria"""
-    categoria = estado["categoria"]
-    info = estado["informacoes_coletadas"]
+@tool
+def buscar_documentos(query: str, categoria: str = "all") -> str:
+    """
+    Busca documentos relevantes na base de conhecimento.
 
-    # Base de conhecimento de soluções
-    solucoes = {
-        "tecnico": "1. Limpe o cache\n2. Reinicie o aplicativo\n3. Verifique sua conexão",
-        "financeiro": "Verifique em Minha Conta > Faturas. Em caso de dúvida, contate o financeiro.",
-        "cancelamento": "Entendemos sua preocupação. Podemos oferecer 20% de desconto nos próximos 3 meses.",
-        "geral": "Nossa equipe irá analisar sua solicitação e retornar em até 24h."
-    }
+    Args:
+        query: Termo de busca
+        categoria: produtos, politicas, documentacao, ou all
+    """
+    print(f"\n🔍 [RETRIEVAL] Buscando: '{query}' em categoria '{categoria}'")
 
-    solucao = solucoes.get(categoria, solucoes["geral"])
+    resultados = []
 
-    print(f"[SOLUÇÃO] {categoria.upper()}")
-    print(f"{solucao}")
+    query_lower = query.lower()
 
-    return {
-        **estado,
-        "solucao": solucao,
-        "historico": [f"Solução gerada para {categoria}"]
-    }
+    # Buscar em produtos
+    if categoria in ["produtos", "all"]:
+        for prod in BASE_CONHECIMENTO["produtos"]:
+            if (query_lower in prod["nome"].lower() or
+                query_lower in prod["features"].lower() or
+                any(term in prod["nome"].lower() for term in ["plano", "preço", "features"] if term in query_lower)):
+                resultados.append(f"Produto: {prod['nome']} - R${prod['preco']} - {prod['features']}")
 
+    # Buscar em políticas
+    if categoria in ["politicas", "all"]:
+        for key, value in BASE_CONHECIMENTO["politicas"].items():
+            if query_lower in key or query_lower in value.lower():
+                resultados.append(f"Política de {key}: {value}")
 
-def verificar_satisfacao(estado: EstadoAtendimento) -> EstadoAtendimento:
-    """Simula verificação de satisfação"""
-    import random
+    # Buscar em documentação
+    if categoria in ["documentacao", "all"]:
+        for key, value in BASE_CONHECIMENTO["documentacao"].items():
+            if query_lower in key or query_lower in value.lower():
+                resultados.append(f"Doc {key}: {value}")
 
-    # Em produção, aqui você pediria feedback real
-    satisfacao = random.randint(3, 5)  # Simula nota de 1-5
+    if not resultados:
+        resultados.append("Nenhum documento relevante encontrado.")
 
-    print(f"[SATISFAÇÃO] Cliente avaliou com {satisfacao}/5 estrelas")
+    print(f"   📄 Encontrados {len(resultados)} documentos")
 
-    return {
-        **estado,
-        "satisfacao": satisfacao,
-        "historico": [f"Avaliação: {satisfacao}/5"]
-    }
-
-
-def decidir_escalonamento(estado: EstadoAtendimento) -> Literal["escalonar", "finalizar"]:
-    """Decide se escala para humano"""
-    prioridade = estado["prioridade"]
-    satisfacao = estado.get("satisfacao", 5)
-
-    if prioridade == "alta" or satisfacao <= 2:
-        print("[DECISÃO] Escalonando para atendente humano")
-        return "escalonar"
-    else:
-        return "finalizar"
+    return "\n".join(resultados)
 
 
-def escalonar_humano(estado: EstadoAtendimento) -> EstadoAtendimento:
-    """Escala para atendente humano"""
-    print("[ESCALONAMENTO] Transferindo para atendente humano...")
-    print(f"Contexto: {estado['categoria']} - {estado['prioridade']}")
-    print(f"Histórico: {len(estado.get('historico', []))} interações")
-
-    return {
-        **estado,
-        "historico": ["Escalonado para humano"]
-    }
+ferramentas_rag = [buscar_documentos]
 
 
-def criar_assistente_atendimento():
-    """Cria assistente de atendimento ao cliente"""
+def agente_rag(estado: EstadoRAG):
+    """
+    Agente RAG que decide buscar documentos e responder.
+    """
+    print("\n🤖 [RAG AGENT] Processando query...")
 
-    workflow = StateGraph(EstadoAtendimento)
+    if not os.getenv("OPENAI_API_KEY"):
+        # Versão sem LLM
+        query = estado["mensagens"][-1].content
+        docs = buscar_documentos.invoke({"query": query, "categoria": "all"})
 
-    workflow.add_node("classificar", classificar_solicitacao)
-    workflow.add_node("coletar", coletar_informacoes)
-    workflow.add_node("solucao", gerar_solucao)
-    workflow.add_node("satisfacao", verificar_satisfacao)
-    workflow.add_node("escalonar", escalonar_humano)
+        resposta = f"Baseado na documentação:\n{docs}"
 
-    workflow.set_entry_point("classificar")
-    workflow.add_edge("classificar", "coletar")
-    workflow.add_edge("coletar", "solucao")
-    workflow.add_edge("solucao", "satisfacao")
+        return {
+            "documentos_relevantes": [docs],
+            "resposta_final": resposta,
+            "mensagens": [AIMessage(content=resposta)]
+        }
+
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm_com_tools = llm.bind_tools(ferramentas_rag)
+
+    system_prompt = SystemMessage(content="""
+Você é um assistente de suporte especializado.
+
+Use a ferramenta buscar_documentos para encontrar informações relevantes
+na base de conhecimento antes de responder.
+
+Sempre base suas respostas nos documentos encontrados.
+Se não encontrar informação, diga que não tem essa informação.
+""")
+
+    mensagens = [system_prompt] + list(estado["mensagens"])
+    resposta = llm_com_tools.invoke(mensagens)
+
+    return {"mensagens": [resposta]}
+
+
+def executar_ferramentas_rag(estado: EstadoRAG):
+    """Executa ferramentas de busca"""
+    print("\n⚡ [EXECUTING TOOLS]")
+
+    from langchain_core.messages import ToolMessage
+
+    ultima_msg = estado["mensagens"][-1]
+    resultados = []
+
+    for tool_call in ultima_msg.tool_calls:
+        ferramenta = ferramentas_rag[0]  # buscar_documentos
+        resultado = ferramenta.invoke(tool_call["args"])
+
+        resultados.append(
+            ToolMessage(content=str(resultado), tool_call_id=tool_call["id"])
+        )
+
+    return {"mensagens": resultados, "documentos_relevantes": [str(r.content) for r in resultados]}
+
+
+def should_continue_rag(estado: EstadoRAG) -> str:
+    """Router para RAG agent"""
+    ultima_msg = estado["mensagens"][-1]
+
+    if hasattr(ultima_msg, "tool_calls") and ultima_msg.tool_calls:
+        return "ferramentas"
+    return "fim"
+
+
+def criar_rag_agent():
+    """Cria RAG Agent completo"""
+
+    workflow = StateGraph(EstadoRAG)
+
+    workflow.add_node("agente", agente_rag)
+    workflow.add_node("ferramentas", executar_ferramentas_rag)
+
+    workflow.set_entry_point("agente")
 
     workflow.add_conditional_edges(
-        "satisfacao",
-        decidir_escalonamento,
-        {
-            "escalonar": "escalonar",
-            "finalizar": END
-        }
+        "agente",
+        should_continue_rag,
+        {"ferramentas": "ferramentas", "fim": END}
     )
 
-    workflow.add_edge("escalonar", END)
+    workflow.add_edge("ferramentas", "agente")
 
     return workflow.compile()
 
 
-# ===========================================
-# CASO 2: SISTEMA DE APROVAÇÃO DE CRÉDITO
-# ===========================================
+# Testar RAG Agent
+if __name__ == "__main__" and os.getenv("OPENAI_API_KEY"):
+    print("\n🧪 Testando RAG Agent...")
 
-class EstadoCredito(TypedDict):
-    cpf: str
-    valor_solicitado: float
-    renda_mensal: float
-    score_credito: int
-    dividas_ativas: float
-    status: str
-    limite_aprovado: float
-    motivo: str
-    analises: list
+    rag_agent = criar_rag_agent()
+
+    perguntas = [
+        "Quais são os planos disponíveis e preços?",
+        "Como funciona o cancelamento?",
+        "Vocês têm API disponível?",
+    ]
+
+    for pergunta in perguntas:
+        print(f"\n{'='*70}")
+        print(f"❓ Pergunta: {pergunta}")
+        print(f"{'='*70}")
+
+        resultado = rag_agent.invoke({
+            "mensagens": [HumanMessage(content=pergunta)],
+            "query": pergunta,
+            "documentos_relevantes": [],
+            "resposta_final": ""
+        })
+
+        print(f"\n💬 Resposta:")
+        print(resultado["mensagens"][-1].content)
 
 
-def validar_dados(estado: EstadoCredito) -> EstadoCredito:
-    """Valida dados básicos"""
-    print("[VALIDAÇÃO] Verificando dados do cliente...")
+# ===================================================================
+# CASO 2: CODE AGENT - AGENTE QUE ESCREVE E EXECUTA CÓDIGO
+# ===================================================================
+print("\n\n" + "="*70)
+print("CASO 2: Code Agent - Escreve e Executa Código")
+print("="*70)
 
-    cpf = estado["cpf"]
-    renda = estado["renda_mensal"]
 
-    # Validação simplificada
-    if len(cpf) != 11 or not cpf.isdigit():
+class EstadoCodeAgent(TypedDict):
+    mensagens: Annotated[Sequence[BaseMessage], operator.add]
+    codigo_gerado: str
+    resultado_execucao: str
+    erro: str
+
+
+@tool
+def executar_python(codigo: str) -> str:
+    """
+    Executa código Python de forma segura (sandbox).
+
+    Args:
+        codigo: Código Python para executar
+    """
+    print(f"\n💻 [EXEC] Executando código Python...")
+
+    try:
+        # ATENÇÃO: Em produção, use sandbox adequado (docker, pyodide, etc)
+        # Aqui é apenas demonstração - NUNCA use eval/exec em produção assim!
+
+        import io
+        from contextlib import redirect_stdout
+
+        # Capturar output
+        f = io.StringIO()
+        with redirect_stdout(f):
+            # Ambiente restrito
+            ambiente = {"__builtins__": __builtins__}
+            exec(codigo, ambiente)
+
+        output = f.getvalue()
+
+        print(f"   ✅ Executado com sucesso")
+        print(f"   📤 Output: {output[:100]}...")
+
+        return f"Executado com sucesso.\nOutput:\n{output}"
+
+    except Exception as e:
+        erro = f"Erro na execução: {str(e)}"
+        print(f"   ❌ {erro}")
+        return erro
+
+
+ferramentas_code = [executar_python]
+
+
+def agente_programador(estado: EstadoCodeAgent):
+    """
+    Agente que escreve e executa código.
+    """
+    print("\n👨‍💻 [CODE AGENT] Analisando tarefa...")
+
+    if not os.getenv("OPENAI_API_KEY"):
+        # Versão simplificada
+        tarefa = estado["mensagens"][-1].content
+
+        if "fibonacci" in tarefa.lower():
+            codigo = """
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+
+for i in range(10):
+    print(f"fib({i}) = {fibonacci(i)}")
+"""
+        else:
+            codigo = """
+# Código de exemplo
+print("Hello from Code Agent!")
+"""
+
         return {
-            **estado,
-            "status": "recusado",
-            "motivo": "CPF inválido"
+            "codigo_gerado": codigo,
+            "mensagens": [AIMessage(content=f"Código gerado:\n```python\n{codigo}\n```")]
         }
 
-    if renda <= 0:
-        return {
-            **estado,
-            "status": "recusado",
-            "motivo": "Renda não informada"
-        }
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm_com_tools = llm.bind_tools(ferramentas_code)
 
-    print("[VALIDAÇÃO] Dados válidos ✓")
-    return {
-        **estado,
-        "analises": ["Dados validados"]
+    system_prompt = SystemMessage(content="""
+Você é um programador especialista em Python.
+
+Quando receber uma tarefa:
+1. Escreva código Python limpo e funcional
+2. Use a ferramenta executar_python para testar o código
+3. Se houver erro, corrija e tente novamente
+4. Explique o código para o usuário
+
+Sempre teste o código antes de apresentar ao usuário!
+""")
+
+    mensagens = [system_prompt] + list(estado["mensagens"])
+    resposta = llm_com_tools.invoke(mensagens)
+
+    return {"mensagens": [resposta]}
+
+
+def executar_ferramentas_code(estado: EstadoCodeAgent):
+    """Executa código"""
+    print("\n⚡ [EXECUTING CODE]")
+
+    from langchain_core.messages import ToolMessage
+
+    ultima_msg = estado["mensagens"][-1]
+    resultados = []
+
+    for tool_call in ultima_msg.tool_calls:
+        resultado = executar_python.invoke(tool_call["args"])
+
+        resultados.append(
+            ToolMessage(content=str(resultado), tool_call_id=tool_call["id"])
+        )
+
+    return {"mensagens": resultados}
+
+
+def should_continue_code(estado: EstadoCodeAgent) -> str:
+    """Router para code agent"""
+    ultima_msg = estado["mensagens"][-1]
+
+    if hasattr(ultima_msg, "tool_calls") and ultima_msg.tool_calls:
+        return "executar"
+    return "fim"
+
+
+def criar_code_agent():
+    """Cria Code Agent completo"""
+
+    workflow = StateGraph(EstadoCodeAgent)
+
+    workflow.add_node("programador", agente_programador)
+    workflow.add_node("executar", executar_ferramentas_code)
+
+    workflow.set_entry_point("programador")
+
+    workflow.add_conditional_edges(
+        "programador",
+        should_continue_code,
+        {"executar": "executar", "fim": END}
+    )
+
+    workflow.add_edge("executar", "programador")
+
+    return workflow.compile()
+
+
+# Testar Code Agent
+print("\n🧪 Testando Code Agent...")
+
+code_agent = criar_code_agent()
+
+tarefas = [
+    "Escreva uma função que calcula fatorial",
+    "Crie um código que imprime números primos até 20",
+]
+
+for tarefa in tarefas:
+    print(f"\n{'='*70}")
+    print(f"🎯 Tarefa: {tarefa}")
+    print(f"{'='*70}")
+
+    if not os.getenv("OPENAI_API_KEY"):
+        print("⚠️  Executando em modo simulado (sem LLM)")
+
+    resultado = code_agent.invoke({
+        "mensagens": [HumanMessage(content=tarefa)],
+        "codigo_gerado": "",
+        "resultado_execucao": "",
+        "erro": ""
+    })
+
+    print(f"\n📝 Resultado:")
+    print(resultado["mensagens"][-1].content[:200] + "...")
+
+
+# ===================================================================
+# CASO 3: RESEARCH AGENT - PESQUISA NA WEB
+# ===================================================================
+print("\n\n" + "="*70)
+print("CASO 3: Research Agent - Pesquisa e Sintetiza Informações")
+print("="*70)
+
+
+class EstadoResearch(TypedDict):
+    mensagens: Annotated[Sequence[BaseMessage], operator.add]
+    query_original: str
+    queries_geradas: List[str]
+    resultados_busca: List[str]
+    sintese_final: str
+
+
+@tool
+def buscar_web(query: str) -> str:
+    """
+    Busca informações na web (simulado).
+
+    Args:
+        query: Termo de busca
+    """
+    print(f"\n🌐 [WEB SEARCH] Buscando: '{query}'")
+
+    # Simular resultados de busca
+    # Em produção, usaria API real (Google, Bing, Tavily, etc)
+
+    resultados_simulados = {
+        "langgraph": """
+LangGraph é uma biblioteca da LangChain para criar aplicações stateful com LLMs.
+Permite construir agentes complexos usando grafos direcionados.
+Principais features: checkpoints, human-in-the-loop, multi-agentes.
+""",
+        "agentes ia": """
+Agentes de IA são sistemas autônomos que usam LLMs para raciocinar e agir.
+Padrão comum: ReAct (Reasoning + Acting).
+Podem usar ferramentas e manter memória de longo prazo.
+""",
+        "default": f"Resultados de busca para '{query}' [simulado]"
     }
 
+    for key in resultados_simulados:
+        if key in query.lower():
+            resultado = resultados_simulados[key]
+            break
+    else:
+        resultado = resultados_simulados["default"]
 
-def consultar_score(estado: EstadoCredito) -> EstadoCredito:
-    """Simula consulta a bureau de crédito"""
-    import random
-
-    print("[BUREAU] Consultando score de crédito...")
-
-    # Simula score (em produção, chamaria API real)
-    score = random.randint(300, 900)
-
-    print(f"[BUREAU] Score obtido: {score}")
-
-    return {
-        **estado,
-        "score_credito": score,
-        "analises": estado.get("analises", []) + [f"Score: {score}"]
-    }
+    print(f"   📄 Resultados encontrados")
+    return resultado
 
 
-def analisar_capacidade(estado: EstadoCredito) -> EstadoCredito:
-    """Analisa capacidade de pagamento"""
-    print("[ANÁLISE] Calculando capacidade de pagamento...")
+ferramentas_research = [buscar_web]
 
-    renda = estado["renda_mensal"]
-    dividas = estado["dividas_ativas"]
-    valor_solicitado = estado["valor_solicitado"]
 
-    # Cálculo de capacidade (30% da renda disponível)
-    renda_disponivel = renda - dividas
-    capacidade = renda_disponivel * 0.3
+def criar_research_agent():
+    """
+    Agente de pesquisa que:
+    1. Gera múltiplas queries de busca
+    2. Busca em cada uma
+    3. Sintetiza os resultados
+    """
 
-    # Calcula parcela estimada (12 meses)
-    parcela_estimada = valor_solicitado / 12
+    workflow = StateGraph(EstadoResearch)
 
-    print(f"[ANÁLISE] Capacidade: R$ {capacidade:.2f}")
-    print(f"[ANÁLISE] Parcela estimada: R$ {parcela_estimada:.2f}")
+    def gerar_queries(estado: EstadoResearch):
+        """Gera múltiplas queries para pesquisa"""
+        print("\n🧠 [RESEARCH] Gerando queries de pesquisa...")
 
-    return {
-        **estado,
-        "analises": estado.get("analises", []) + [
-            f"Capacidade: R$ {capacidade:.2f}",
-            f"Parcela: R$ {parcela_estimada:.2f}"
+        query_original = estado["mensagens"][-1].content
+
+        # Simples: gerar variações
+        queries = [
+            query_original,
+            f"{query_original} definição",
+            f"{query_original} exemplos práticos",
         ]
-    }
 
+        print(f"   📝 Geradas {len(queries)} queries")
+        for q in queries:
+            print(f"      - {q}")
 
-def decidir_credito(estado: EstadoCredito) -> EstadoCredito:
-    """Decisão final de crédito"""
-    print("[DECISÃO] Analisando solicitação...")
+        return {"queries_geradas": queries, "query_original": query_original}
 
-    score = estado["score_credito"]
-    valor_solicitado = estado["valor_solicitado"]
-    renda = estado["renda_mensal"]
-    dividas = estado["dividas_ativas"]
+    def executar_buscas(estado: EstadoResearch):
+        """Executa todas as buscas"""
+        print("\n🔍 [RESEARCH] Executando buscas...")
 
-    # Regras de negócio
-    if score < 400:
-        status = "recusado"
-        limite = 0
-        motivo = "Score de crédito insuficiente"
+        resultados = []
+        for query in estado["queries_geradas"]:
+            resultado = buscar_web.invoke({"query": query})
+            resultados.append(resultado)
 
-    elif dividas > renda * 0.5:
-        status = "recusado"
-        limite = 0
-        motivo = "Endividamento elevado"
+        return {"resultados_busca": resultados}
 
-    elif valor_solicitado > renda * 3:
-        status = "aprovado_parcial"
-        limite = renda * 3
-        motivo = f"Aprovado limite de R$ {limite:.2f} (menor que solicitado)"
+    def sintetizar(estado: EstadoResearch):
+        """Sintetiza resultados"""
+        print("\n📊 [RESEARCH] Sintetizando resultados...")
 
-    else:
-        status = "aprovado"
-        limite = valor_solicitado
-        motivo = "Crédito aprovado conforme solicitado"
+        if not os.getenv("OPENAI_API_KEY"):
+            sintese = "RESUMO:\n" + "\n".join(estado["resultados_busca"])
+            return {
+                "sintese_final": sintese,
+                "mensagens": [AIMessage(content=sintese)]
+            }
 
-    print(f"[DECISÃO] Status: {status}")
-    print(f"[DECISÃO] {motivo}")
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
 
-    return {
-        **estado,
-        "status": status,
-        "limite_aprovado": limite,
-        "motivo": motivo
-    }
+        prompt = f"""
+Você é um pesquisador especializado.
 
+Query original: {estado['query_original']}
 
-def criar_sistema_credito():
-    """Cria sistema de análise de crédito"""
+Resultados encontrados:
+{chr(10).join([f"{i+1}. {r}" for i, r in enumerate(estado['resultados_busca'])])}
 
-    workflow = StateGraph(EstadoCredito)
+Crie um resumo executivo abrangente e bem estruturado.
+"""
 
-    workflow.add_node("validar", validar_dados)
-    workflow.add_node("score", consultar_score)
-    workflow.add_node("capacidade", analisar_capacidade)
-    workflow.add_node("decidir", decidir_credito)
+        resposta = llm.invoke([HumanMessage(content=prompt)])
 
-    workflow.set_entry_point("validar")
-    workflow.add_edge("validar", "score")
-    workflow.add_edge("score", "capacidade")
-    workflow.add_edge("capacidade", "decidir")
-    workflow.add_edge("decidir", END)
+        return {
+            "sintese_final": resposta.content,
+            "mensagens": [AIMessage(content=resposta.content)]
+        }
+
+    workflow.add_node("gerar_queries", gerar_queries)
+    workflow.add_node("buscar", executar_buscas)
+    workflow.add_node("sintetizar", sintetizar)
+
+    workflow.set_entry_point("gerar_queries")
+    workflow.add_edge("gerar_queries", "buscar")
+    workflow.add_edge("buscar", "sintetizar")
+    workflow.add_edge("sintetizar", END)
 
     return workflow.compile()
 
 
-# ===========================================
-# CASO 3: PROCESSADOR DE DOCUMENTOS
-# ===========================================
-
-class EstadoDocumento(TypedDict):
-    arquivo: str
-    tipo_documento: str
-    texto_extraido: str
-    entidades: dict
-    validacao: dict
-    status: str
-
-
-def detectar_tipo(estado: EstadoDocumento) -> EstadoDocumento:
-    """Detecta tipo do documento"""
-    arquivo = estado["arquivo"].lower()
-
-    if "rg" in arquivo or "identidade" in arquivo:
-        tipo = "rg"
-    elif "cpf" in arquivo:
-        tipo = "cpf"
-    elif "comprovante" in arquivo and "renda" in arquivo:
-        tipo = "comprovante_renda"
-    elif "comprovante" in arquivo and "residencia" in arquivo:
-        tipo = "comprovante_residencia"
-    else:
-        tipo = "desconhecido"
-
-    print(f"[DETECÇÃO] Tipo identificado: {tipo}")
-
-    return {
-        **estado,
-        "tipo_documento": tipo
-    }
-
-
-def extrair_texto(estado: EstadoDocumento) -> EstadoDocumento:
-    """Simula extração de texto (OCR)"""
-    print(f"[OCR] Extraindo texto de {estado['arquivo']}...")
-
-    # Simulação de texto extraído
-    textos_simulados = {
-        "rg": "IDENTIDADE\nNome: JOÃO DA SILVA\nRG: 12.345.678-9\nData Nasc: 01/01/1990",
-        "cpf": "CPF\n123.456.789-00\nJOÃO DA SILVA",
-        "comprovante_renda": "CONTRACHEQUE\nSalário: R$ 5.000,00\nFuncionário: JOÃO DA SILVA",
-        "comprovante_residencia": "CONTA DE LUZ\nEndereço: Rua A, 123\nJOÃO DA SILVA"
-    }
+# Testar Research Agent
+print("\n🧪 Testando Research Agent...")
+
+research_agent = criar_research_agent()
+
+topicos = [
+    "O que é LangGraph?",
+    "Como funcionam agentes de IA?",
+]
+
+for topico in topicos:
+    print(f"\n{'='*70}")
+    print(f"🔎 Pesquisando: {topico}")
+    print(f"{'='*70}")
+
+    resultado = research_agent.invoke({
+        "mensagens": [HumanMessage(content=topico)],
+        "query_original": "",
+        "queries_geradas": [],
+        "resultados_busca": [],
+        "sintese_final": ""
+    })
+
+    print(f"\n📄 Síntese:")
+    print(resultado["sintese_final"][:300] + "...")
+
+
+# ===================================================================
+# RESUMO FINAL
+# ===================================================================
+print("\n\n" + "="*70)
+print("🎓 PARABÉNS! ESTUDO COMPLETO DE LANGGRAPH")
+print("="*70)
+print("""
+✅ VOCÊ APRENDEU:
+
+1. Fundamentos de Agentes
+   - O que são agentes de IA
+   - Padrão ReAct
+   - State management
+
+2. Agente com LLM e Tools
+   - Tool calling
+   - Roteamento condicional
+   - Loop de raciocínio
+
+3. Memória e Conversação
+   - Checkpoints
+   - Thread management
+   - Memória persistente
+
+4. Multi-Agentes
+   - Padrão Sequential
+   - Padrão Parallel
+   - Padrão Handoff
+
+5. Supervisor Pattern
+   - Delegação dinâmica
+   - Orquestração inteligente
+   - Gerenciamento de agentes
+
+6. Human-in-the-Loop
+   - Interrupt before/after
+   - State modification
+   - Aprovação humana
+
+7. Casos Práticos
+   - RAG Agent
+   - Code Agent
+   - Research Agent
+
+🚀 PRÓXIMOS PASSOS:
+
+1. INTEGRE COM PRODUÇÃO:
+   - Adicione APIs reais
+   - Use vector stores reais (Pinecone, Chroma)
+   - Implemente logging e monitoring
+
+2. ADICIONE PERSISTÊNCIA:
+   - PostgreSQL checkpointer
+   - Redis para cache
+   - S3 para armazenamento
+
+3. ESCALE:
+   - Deploy em cloud
+   - Use async para performance
+   - Implemente rate limiting
+
+4. MONITORE:
+   - LangSmith para tracing
+   - Métricas de performance
+   - Alertas de erro
+
+5. APRIMORE:
+   - Adicione mais ferramentas
+   - Implemente RAG avançado
+   - Crie UIs interativas
+
+📚 RECURSOS ADICIONAIS:
+
+- Documentação oficial: https://langchain-ai.github.io/langgraph/
+- Exemplos: https://github.com/langchain-ai/langgraph/tree/main/examples
+- Discord LangChain: discord.gg/langchain
 
-    texto = textos_simulados.get(estado["tipo_documento"], "Texto não identificado")
-
-    print(f"[OCR] Texto extraído: {len(texto)} caracteres")
-
-    return {
-        **estado,
-        "texto_extraido": texto
-    }
-
-
-def extrair_entidades(estado: EstadoDocumento) -> EstadoDocumento:
-    """Extrai entidades do texto"""
-    print("[NER] Extraindo entidades...")
+💡 PROJETOS SUGERIDOS:
 
-    texto = estado["texto_extraido"]
-    tipo = estado["tipo_documento"]
+1. Assistente Pessoal com Calendário
+2. Agente de Análise de Dados
+3. Sistema de Atendimento Multicanal
+4. Agente de Automação de Tarefas
+5. Research Assistant Avançado
 
-    entidades = {}
-
-    # Expressões regulares simples para extração
-    if tipo == "rg":
-        rg_match = re.search(r'RG:\s*([\d.-]+)', texto)
-        nome_match = re.search(r'Nome:\s*([A-Z\s]+)', texto)
-        data_match = re.search(r'Data Nasc:\s*(\d{2}/\d{2}/\d{4})', texto)
+VOCÊ ESTÁ PRONTO PARA CONSTRUIR AGENTES DE IA PODEROSOS! 🎉
+""")
 
-        if rg_match:
-            entidades["rg"] = rg_match.group(1)
-        if nome_match:
-            entidades["nome"] = nome_match.group(1).strip()
-        if data_match:
-            entidades["data_nascimento"] = data_match.group(1)
-
-    elif tipo == "cpf":
-        cpf_match = re.search(r'(\d{3}\.\d{3}\.\d{3}-\d{2})', texto)
-        if cpf_match:
-            entidades["cpf"] = cpf_match.group(1)
-
-    elif tipo == "comprovante_renda":
-        salario_match = re.search(r'R?\$\s*([\d.,]+)', texto)
-        if salario_match:
-            entidades["renda"] = salario_match.group(1)
-
-    print(f"[NER] Entidades extraídas: {list(entidades.keys())}")
-
-    return {
-        **estado,
-        "entidades": entidades
-    }
-
-
-def validar_documento(estado: EstadoDocumento) -> EstadoDocumento:
-    """Valida documento extraído"""
-    print("[VALIDAÇÃO] Verificando documento...")
-
-    entidades = estado["entidades"]
-    tipo = estado["tipo_documento"]
-
-    validacao = {"valido": False, "motivos": []}
-
-    if tipo == "rg":
-        if "rg" in entidades and "nome" in entidades:
-            validacao["valido"] = True
-        else:
-            validacao["motivos"].append("Dados incompletos no RG")
-
-    elif tipo == "cpf":
-        if "cpf" in entidades:
-            validacao["valido"] = True
-        else:
-            validacao["motivos"].append("CPF não identificado")
-
-    elif tipo == "comprovante_renda":
-        if "renda" in entidades:
-            validacao["valido"] = True
-        else:
-            validacao["motivos"].append("Valor da renda não identificado")
-
-    else:
-        validacao["motivos"].append("Tipo de documento não suportado")
-
-    status = "aprovado" if validacao["valido"] else "rejeitado"
-
-    print(f"[VALIDAÇÃO] Status: {status}")
-    if not validacao["valido"]:
-        for motivo in validacao["motivos"]:
-            print(f"  - {motivo}")
-
-    return {
-        **estado,
-        "validacao": validacao,
-        "status": status
-    }
-
-
-def criar_processador_documentos():
-    """Cria processador de documentos"""
-
-    workflow = StateGraph(EstadoDocumento)
-
-    workflow.add_node("detectar", detectar_tipo)
-    workflow.add_node("ocr", extrair_texto)
-    workflow.add_node("ner", extrair_entidades)
-    workflow.add_node("validar", validar_documento)
-
-    workflow.set_entry_point("detectar")
-    workflow.add_edge("detectar", "ocr")
-    workflow.add_edge("ocr", "ner")
-    workflow.add_edge("ner", "validar")
-    workflow.add_edge("validar", END)
-
-    return workflow.compile()
-
-
-# EXECUTAR EXEMPLOS
-if __name__ == "__main__":
-    print("=" * 80)
-    print("CASO PRÁTICO 1: Assistente de Atendimento ao Cliente")
-    print("=" * 80)
-
-    app1 = criar_assistente_atendimento()
-
-    casos_teste = [
-        "Estou com problema urgente, erro 404 no sistema",
-        "Não entendi minha cobrança de R$ 150,00",
-        "Quero cancelar minha assinatura"
-    ]
-
-    for i, caso in enumerate(casos_teste, 1):
-        print(f"\n{'='*70}")
-        print(f"CASO {i}: {caso}")
-        print('='*70)
-
-        resultado = app1.invoke({
-            "mensagem_cliente": caso,
-            "categoria": "",
-            "prioridade": "",
-            "informacoes_coletadas": {},
-            "solucao": "",
-            "satisfacao": 0,
-            "historico": []
-        })
-
-        print(f"\n[RESUMO]")
-        print(f"Categoria: {resultado['categoria']}")
-        print(f"Prioridade: {resultado['prioridade']}")
-        print(f"Solução: {resultado['solucao'][:50]}...")
-
-    print("\n" + "=" * 80)
-    print("CASO PRÁTICO 2: Sistema de Aprovação de Crédito")
-    print("=" * 80)
-
-    app2 = criar_sistema_credito()
-
-    clientes_teste = [
-        {"cpf": "12345678901", "valor_solicitado": 10000, "renda_mensal": 5000, "dividas_ativas": 1000},
-        {"cpf": "98765432100", "valor_solicitado": 50000, "renda_mensal": 8000, "dividas_ativas": 5000},
-    ]
-
-    for i, cliente in enumerate(clientes_teste, 1):
-        print(f"\n{'='*70}")
-        print(f"CLIENTE {i}")
-        print('='*70)
-        print(f"Valor solicitado: R$ {cliente['valor_solicitado']:.2f}")
-        print(f"Renda mensal: R$ {cliente['renda_mensal']:.2f}")
-
-        resultado = app2.invoke({
-            **cliente,
-            "score_credito": 0,
-            "status": "",
-            "limite_aprovado": 0,
-            "motivo": "",
-            "analises": []
-        })
-
-        print(f"\n[DECISÃO FINAL]")
-        print(f"Status: {resultado['status']}")
-        print(f"Limite: R$ {resultado['limite_aprovado']:.2f}")
-        print(f"Motivo: {resultado['motivo']}")
-
-    print("\n" + "=" * 80)
-    print("CASO PRÁTICO 3: Processador de Documentos")
-    print("=" * 80)
-
-    app3 = criar_processador_documentos()
-
-    documentos_teste = [
-        "documento_rg_frente.pdf",
-        "comprovante_renda_2024.pdf",
-        "comprovante_residencia.pdf"
-    ]
-
-    for doc in documentos_teste:
-        print(f"\n{'='*70}")
-        print(f"DOCUMENTO: {doc}")
-        print('='*70)
-
-        resultado = app3.invoke({
-            "arquivo": doc,
-            "tipo_documento": "",
-            "texto_extraido": "",
-            "entidades": {},
-            "validacao": {},
-            "status": ""
-        })
-
-        print(f"\n[RESULTADO]")
-        print(f"Tipo: {resultado['tipo_documento']}")
-        print(f"Entidades: {list(resultado['entidades'].keys())}")
-        print(f"Status: {resultado['status']}")
-
-    print("\n" + "=" * 80)
-    print("""
-    CASOS PRÁTICOS IMPLEMENTADOS:
-
-    1. ATENDIMENTO AO CLIENTE
-       - Classificação automática
-       - Roteamento inteligente
-       - Escalonamento quando necessário
-
-    2. ANÁLISE DE CRÉDITO
-       - Validação de dados
-       - Consulta a bureaus
-       - Decisão automatizada
-
-    3. PROCESSAMENTO DE DOCUMENTOS
-       - OCR (extração de texto)
-       - NER (extração de entidades)
-       - Validação automática
-
-    PRÓXIMOS PASSOS:
-    - Integre com APIs reais
-    - Adicione persistência
-    - Implemente logging
-    - Crie dashboards de monitoramento
-
-    PARABÉNS! Você completou o estudo guiado de LangGraph!
-    """)
-    print("=" * 80)
+print("="*70)
